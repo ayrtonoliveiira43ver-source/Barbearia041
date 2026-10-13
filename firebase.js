@@ -1,8 +1,19 @@
-import {initializeApp} from 'firebase/app';
-import {getAuth,GoogleAuthProvider} from 'firebase/auth';
-import {getFirestore} from 'firebase/firestore';
-import {getStorage} from 'firebase/storage';
-const config={apiKey:import.meta.env.VITE_FIREBASE_API_KEY,authDomain:import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,projectId:import.meta.env.VITE_FIREBASE_PROJECT_ID,storageBucket:import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,appId:import.meta.env.VITE_FIREBASE_APP_ID};
-export const configured=Boolean(config.apiKey&&config.projectId);
-const app=initializeApp(configured?config:{apiKey:'demo',authDomain:'demo.invalid',projectId:'demo',appId:'demo'});
-export const auth=getAuth(app),db=getFirestore(app),storage=getStorage(app),googleProvider=new GoogleAuthProvider();
+import { initializeApp } from "firebase/app";
+import { getAuth } from "firebase/auth";
+import { getFirestore } from "firebase/firestore";
+import { getStorage } from "firebase/storage";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDWiO8GnvwIqeLpokE3NWnqt-3n1YC5dpM",
+  authDomain: "barbearia041-5629f.firebaseapp.com",
+  projectId: "barbearia041-5629f",
+  storageBucket: "barbearia041-5629f.firebasestorage.app",
+  messagingSenderId: "910092050325",
+  appId: "1:910092050325:web:2022aa3772d2630b0c609c"
+};
+
+const app = initializeApp(firebaseConfig);
+
+export const auth = getAuth(app);
+export const db = getFirestore(app);
+export const storage = getStorage(app);

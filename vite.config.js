@@ -1,1 +1,3 @@
-import {defineConfig} from 'vite';export default defineConfig({base:process.env.GITHUB_PAGES==='true'?'/Barbearia041/':'/'});
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+export default defineConfig({plugins:[react()],base:'/Barbearia041/'});

@@ -1,43 +1,185 @@
-import React,{useEffect,useMemo,useState} from 'react';
-import{createRoot}from'react-dom/client';
-import{onAuthStateChanged,signInWithEmailAndPassword,signOut}from'firebase/auth';
-import{collection,doc,onSnapshot,addDoc,updateDoc,deleteDoc,serverTimestamp}from'firebase/firestore';
-import{auth,db}from'./firebase';
+import React, { useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { collection, doc, onSnapshot, addDoc, updateDoc, deleteDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from './firebase';
 import './style.css';
-const money=n=>new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(Number(n)||0);
-const today=()=>new Date().toLocaleDateString('en-CA');
-const number=x=>Number(x)||0;
-const categories=['Água','Energia elétrica','Aluguel','Internet','Lavanderia','Produtos e insumos','Manutenção e consertos','Equipamentos','Limpeza','Salários e comissões','Impostos','Marketing','Outros'];
-const methods=['Pix','Dinheiro','Débito','Crédito','Transferência','Outro'];
-const defs={services:{title:'Serviços',fields:[['name','Nome','text',true],['price','Preço (R$)','number',true],['duration','Duração (min)','number']]},appointments:{title:'Atendimentos',fields:[['date','Data','date',true],['customer','Cliente / identificação','text'],['service','Serviço','text',true],['amount','Valor bruto (R$)','number',true],['discount','Desconto (R$)','number'],['fee','Taxa do cartão (R$)','number'],['method','Pagamento','select',true,methods],['status','Situação','select',true,['Pago','Pendente','Cancelado']],['notes','Observações','text']]},expenses:{title:'Despesas',fields:[['date','Data','date',true],['category','Categoria','select',true,categories],['description','Descrição','text',true],['amount','Valor (R$)','number',true],['status','Situação','select',true,['Pago','Pendente']],['method','Pagamento','select',false,methods],['notes','Observações','text']]},income:{title:'Outras receitas',fields:[['date','Data','date',true],['description','Descrição','text',true],['amount','Valor (R$)','number',true],['method','Recebimento','select',true,methods],['status','Situação','select',true,['Recebido','Pendente']]]},products:{title:'Produtos e estoque',fields:[['name','Produto','text',true],['category','Categoria','text'],['quantity','Quantidade atual','number',true],['min','Estoque mínimo','number'],['unit','Unidade','select',false,['un','ml','L','kg','pacote']],['cost','Custo unitário (R$)','number'],['price','Preço de venda (R$)','number'],['supplier','Fornecedor','text']]},equipment:{title:'Equipamentos',fields:[['name','Equipamento','text',true],['brand','Marca / modelo','text'],['purchaseDate','Data da compra','date'],['purchaseValue','Valor de compra (R$)','number'],['condition','Estado','select',false,['Operacional','Em manutenção','Fora de uso']],['lastMaintenance','Última manutenção','date'],['maintenanceCost','Custo da manutenção (R$)','number'],['notes','Observações','text']]}};
-const menu=[['dashboard','Visão geral','◈'],['appointments','Atendimentos','✂'],['services','Serviços','▤'],['expenses','Despesas','↘'],['income','Outras receitas','↗'],['products','Estoque','▣'],['equipment','Equipamentos','⚙'],['reports','Relatórios','▥']];
-function App(){const[user,setUser]=useState(undefined),[admin,setAdmin]=useState(false),[loadingAdmin,setLoadingAdmin]=useState(true),[tab,setTab]=useState('dashboard'),[records,setRecords]=useState({}),[form,setForm]=useState(null),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false),[month,setMonth]=useState(today().slice(0,7)),[query,setQuery]=useState('');
-useEffect(()=>onAuthStateChanged(auth,u=>{setUser(u);setLoadingAdmin(!!u);if(!u)setAdmin(false)}),[]);
-useEffect(()=>{if(!user){setAdmin(false);setLoadingAdmin(false);return}return onSnapshot(doc(db,'admins',user.uid),s=>{setAdmin(s.exists()&&s.data().role==='admin'&&s.data().active===true);setLoadingAdmin(false)},e=>{setMessage('Não foi possível verificar a permissão: '+e.code);setAdmin(false);setLoadingAdmin(false)})},[user]);
-useEffect(()=>{if(!admin){setRecords({});return}const unsubs=Object.keys(defs).map(k=>onSnapshot(collection(db,'erp',k,'items'),snap=>setRecords(prev=>({...prev,[k]:snap.docs.map(d=>({id:d.id,...d.data()}))})),e=>setMessage('Erro em '+k+': '+e.code)));return()=>unsubs.forEach(f=>f())},[admin]);
-const list=k=>records[k]||[];
-const validDate=x=>(x||'').slice(0,7)===month;
-const appointments=list('appointments').filter(x=>validDate(x.date)&&x.status!=='Cancelado');
-const paid=appointments.filter(x=>x.status==='Pago');
-const exp=list('expenses').filter(x=>validDate(x.date));
-const inc=list('income').filter(x=>validDate(x.date));
-const gross=paid.reduce((a,x)=>a+number(x.amount),0);
-const fees=paid.reduce((a,x)=>a+number(x.fee)+number(x.discount),0);
-const other=inc.filter(x=>x.status==='Recebido').reduce((a,x)=>a+number(x.amount),0);
-const spent=exp.filter(x=>x.status==='Pago').reduce((a,x)=>a+number(x.amount),0);
-const profit=gross-fees+other-spent;
-const pending=appointments.filter(x=>x.status==='Pendente').reduce((a,x)=>a+number(x.amount)-number(x.discount),0);
-const resetForm=k=>{const v={};defs[k].fields.forEach(([key,,type,,opts])=>{v[key]=key==='date'?today():type==='select'?opts?.[0]||'':''});setForm({type:k,data:v})};
-const save=async e=>{e.preventDefault();if(!admin||!form)return;setBusy(true);try{const {type,data}=form;const payload={...data};defs[type].fields.filter(x=>x[2]==='number').forEach(([k])=>payload[k]=number(payload[k]));if(type==='appointments'&&payload.status==='Pago'&&number(payload.discount)>number(payload.amount))throw Error('O desconto não pode exceder o valor do serviço.');if(data.id){const{id,...rest}=payload;await updateDoc(doc(db,'erp',type,'items',id),{...rest,updatedAt:serverTimestamp()})}else await addDoc(collection(db,'erp',type,'items'),{...payload,createdAt:serverTimestamp()});setForm(null);setMessage('Registro salvo com sucesso.')}catch(err){setMessage('Falha ao salvar: '+err.message)}finally{setBusy(false)}};
-const remove=async(type,id)=>{if(!window.confirm('Excluir definitivamente este registro?'))return;try{await deleteDoc(doc(db,'erp',type,'items',id));setMessage('Registro excluído.')}catch(e){setMessage('Erro ao excluir: '+e.code)}};
-const exportCsv=(kind)=>{const items=kind==='all'?Object.keys(defs).flatMap(k=>list(k).map(x=>({tipo:k,...x}))):list(kind);const filtered=kind==='all'?items:items.filter(x=>!x.date||validDate(x.date));const keys=[...new Set(filtered.flatMap(x=>Object.keys(x).filter(k=>!['createdAt','updatedAt'].includes(k))))];const escape=v=>'"'+String(v??'').replaceAll('"','""')+'"';const csv='\ufeff'+[keys.join(';'),...filtered.map(x=>keys.map(k=>escape(x[k])).join(';'))].join('\r\n');const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));const a=document.createElement('a');a.href=url;a.download=`barbearia041-${kind}-${month}.csv`;a.click();URL.revokeObjectURL(url)};
-if(user===undefined||loadingAdmin)return <div className="center">Carregando Barbearia 041…</div>;
-if(!user)return <main className="auth"><div className="authCard"><div className="logo">✂ <span>041</span></div><p className="eyebrow">SISTEMA DE GESTÃO</p><h1>Controle total.<br/><em>Em um só lugar.</em></h1><p>Acesso exclusivo do proprietário</p><form onSubmit={async e=>{e.preventDefault();setBusy(true);setMessage('');try{await signInWithEmailAndPassword(auth,email,password)}catch(err){setMessage('Não foi possível entrar: '+err.code)}finally{setBusy(false)}}}><label>E-mail<input type="email" value={email} onChange={e=>setEmail(e.target.value)} required autoComplete="username"/></label><label>Senha<input type="password" value={password} onChange={e=>setPassword(e.target.value)} required autoComplete="current-password"/></label><button className="primary" disabled={busy}>Entrar no sistema</button></form>{message&&<p className="error">{message}</p>}</div></main>;
-if(!admin)return <main className="auth"><div className="authCard"><h2>Acesso restrito</h2><p>Esta conta não possui permissão de proprietário no Firebase.</p>{message&&<p className="error">{message}</p>}<button onClick={()=>signOut(auth)}>Sair</button></div></main>;
-return <div className="layout"><aside className="sidebar"><div className="logo">✂ <span>041</span></div><p className="eyebrow">GESTÃO EMPRESARIAL</p><nav>{menu.map(([id,label,ico])=><button key={id} className={tab===id?'active':''} onClick={()=>{setTab(id);setForm(null);setQuery('')}}><span>{ico}</span>{label}</button>)}</nav><div className="user">Proprietário<small>{user.email}</small><button onClick={()=>signOut(auth)}>Sair da conta ↗</button></div></aside><main className="content"><header className="top"><div><p className="eyebrow">BARBEARIA 041 / ADMINISTRATIVO</p><h1>{tab==='dashboard'?'Visão geral':tab==='reports'?'Relatórios':defs[tab]?.title}</h1></div><div className="tools"><label>Período <input type="month" value={month} onChange={e=>setMonth(e.target.value)}/></label></div></header>{message&&<div className="notice">{message}<button onClick={()=>setMessage('')}>×</button></div>}
-{tab==='dashboard'&&<><section className="stats"><article><small>Faturamento bruto recebido</small><strong>{money(gross)}</strong><span>{paid.length} atendimentos pagos</span></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong><span>{exp.length} lançamentos no período</span></article><article><small>Resultado gerencial</small><strong className={profit>=0?'positive':'negative'}>{money(profit)}</strong><span>Após descontos e taxas</span></article><article><small>A receber de atendimentos</small><strong>{money(pending)}</strong><span>{appointments.length} atendimentos registrados</span></article></section><section className="two"><div className="panel"><h2>Resumo financeiro</h2>{[['Atendimentos recebidos',gross],['Descontos + taxas',-fees],['Outras receitas recebidas',other],['Despesas pagas',-spent],['Resultado',profit]].map(([label,value])=><div className="line" key={label}><span>{label}</span><b>{money(value)}</b></div>)}<p className="hint">Resultado gerencial de caixa. Não inclui impostos ou custos não lançados.</p></div><div className="panel"><h2>Indicadores</h2><div className="line"><span>Atendimentos no mês</span><b>{appointments.length}</b></div><div className="line"><span>Ticket médio pago</span><b>{money(paid.length?gross/paid.length:0)}</b></div><div className="line"><span>Estoque baixo</span><b>{list('products').filter(x=>number(x.quantity)<=number(x.min)).length} produtos</b></div><div className="line"><span>Despesas pendentes</span><b>{money(exp.filter(x=>x.status==='Pendente').reduce((a,x)=>a+number(x.amount),0))}</b></div><button className="primary" onClick={()=>{setTab('appointments');resetForm('appointments')}}>+ Registrar atendimento</button></div></section></>}
-{Object.hasOwn(defs,tab)&&<section className="panel"><div className="sectionHead"><div><h2>{defs[tab].title}</h2><p>{tab==='appointments'?'Registre cada atendimento e sua forma de pagamento.':tab==='expenses'?'Lance despesas pagas e pendentes.':'Cadastre e atualize os registros.'}</p></div><button className="primary" onClick={()=>resetForm(tab)}>+ Novo registro</button></div><div className="tableTools"><input placeholder="Buscar registros..." value={query} onChange={e=>setQuery(e.target.value)}/><button onClick={()=>exportCsv(tab)}>Exportar CSV ↓</button></div><div className="tableWrap"><table><thead><tr>{defs[tab].fields.slice(0,5).map(f=><th key={f[0]}>{f[1]}</th>)}<th>Ações</th></tr></thead><tbody>{list(tab).filter(x=>(!x.date||validDate(x.date))&&JSON.stringify(x).toLowerCase().includes(query.toLowerCase())).sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(x=><tr key={x.id}>{defs[tab].fields.slice(0,5).map(([k,,type])=><td key={k}>{type==='number'&&['amount','price','cost','fee','discount','purchaseValue','maintenanceCost'].includes(k)?money(x[k]):String(x[k]??'—')}</td>)}<td><button className="linkBtn" onClick={()=>setForm({type:tab,data:{...x}})}>Editar</button><button className="linkBtn danger" onClick={()=>remove(tab,x.id)}>Excluir</button></td></tr>)}{list(tab).length===0&&<tr><td colSpan="6" className="empty">Nenhum registro cadastrado ainda.</td></tr>}</tbody></table></div></section>}
-{tab==='reports'&&<><section className="stats"><article><small>Receitas líquidas recebidas</small><strong>{money(gross-fees+other)}</strong></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong></article><article><small>Resultado gerencial</small><strong>{money(profit)}</strong></article><article><small>Atendimentos</small><strong>{appointments.length}</strong></article></section><section className="two"><div className="panel"><h2>Recebimentos por forma de pagamento</h2>{methods.map(m=><div className="line" key={m}><span>{m}</span><b>{money(paid.filter(x=>x.method===m).reduce((a,x)=>a+number(x.amount)-number(x.discount)-number(x.fee),0)+inc.filter(x=>x.method===m&&x.status==='Recebido').reduce((a,x)=>a+number(x.amount),0))}</b></div>)}</div><div className="panel"><h2>Despesas por categoria</h2>{categories.map(c=><div className="line" key={c}><span>{c}</span><b>{money(exp.filter(x=>x.category===c&&x.status==='Pago').reduce((a,x)=>a+number(x.amount),0))}</b></div>)}</div></section><section className="panel"><h2>Exportar registros</h2><p>Faça uma cópia CSV dos lançamentos para conferência e arquivamento.</p><button className="primary" onClick={()=>exportCsv('all')}>Exportar todos os registros ↓</button></section></>}
-<footer>Barbearia 041 • Gestão interna • Os pagamentos são lançados manualmente. Faça backups regulares dos dados.</footer></main>
-{form&&<div className="modalBackdrop" onClick={()=>setForm(null)}><div className="modal" onClick={e=>e.stopPropagation()}><div className="modalHeader"><h2>{form.data.id?'Editar':'Cadastrar'} — {defs[form.type].title}</h2><button onClick={()=>setForm(null)}>×</button></div><form onSubmit={save}><div className="formGrid">{defs[form.type].fields.map(([key,label,type,required,options])=><label key={key}>{label}{type==='select'?<select required={!!required} value={form.data[key]??''} onChange={e=>setForm({...form,data:{...form.data,[key]:e.target.value}})}>{options.map(x=><option key={x}>{x}</option>)}</select>:<input required={!!required} type={type} min={type==='number'?'0':undefined} step={type==='number'?'0.01':undefined} value={form.data[key]??''} onChange={e=>setForm({...form,data:{...form.data,[key]:e.target.value}})}/>}</label>)}</div><div className="modalActions"><button type="button" onClick={()=>setForm(null)}>Cancelar</button><button className="primary" disabled={busy}>{busy?'Salvando…':'Salvar registro'}</button></div></form></div></div>}</div>}
-createRoot(document.getElementById('root')).render(<App/>);
+
+const money = n => new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(Number(n) || 0);
+const number = x => Number(x) || 0;
+const localISO = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const today = () => localISO();
+const addDays = (iso, days) => { const [y, m, d] = iso.split('-').map(Number); const dt = new Date(y, m - 1, d + days); return localISO(dt); };
+const dayDiff = (from, to) => { const a = Date.parse(from + 'T12:00:00Z'), b = Date.parse(to + 'T12:00:00Z'); return Math.round((b - a) / 86400000); };
+const monthShift = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const dueInMonth = (ym, day) => { const [y, m] = ym.split('-').map(Number); const last = new Date(y, m, 0).getDate(); return `${ym}-${String(Math.min(Math.max(Number(day) || 1, 1), last)).padStart(2, '0')}`; };
+const categories = ['Água', 'Energia elétrica', 'Aluguel', 'Internet', 'Lavanderia', 'Produtos e insumos', 'Manutenção e consertos', 'Equipamentos', 'Limpeza', 'Salários e comissões', 'Impostos', 'Marketing', 'Outros'];
+const methods = ['Pix', 'Dinheiro', 'Débito', 'Crédito', 'Transferência', 'Outro'];
+const defs = {
+  services: { title: 'Serviços', fields: [['name', 'Nome', 'text', true], ['price', 'Preço (R$)', 'number', true], ['duration', 'Duração (min)', 'number']] },
+  appointments: { title: 'Atendimentos', fields: [['date', 'Data', 'date', true], ['customer', 'Cliente / identificação', 'text'], ['service', 'Serviço', 'text', true], ['amount', 'Valor bruto (R$)', 'number', true], ['discount', 'Desconto (R$)', 'number'], ['fee', 'Taxa do cartão (R$)', 'number'], ['method', 'Pagamento', 'select', true, methods], ['status', 'Situação', 'select', true, ['Pago', 'Pendente', 'Cancelado']], ['notes', 'Observações', 'text']] },
+  expenses: { title: 'Despesas', fields: [['date', 'Data do lançamento', 'date', true], ['dueDate', 'Data de vencimento', 'date'], ['category', 'Categoria', 'select', true, categories], ['description', 'Descrição', 'text', true], ['amount', 'Valor (R$)', 'number', true], ['status', 'Situação', 'select', true, ['Pago', 'Pendente']], ['method', 'Pagamento', 'select', false, methods], ['expenseType', 'Tipo de despesa', 'select', true, ['Avulsa', 'Fixa mensal']], ['paidAt', 'Data do pagamento', 'date'], ['notes', 'Observações', 'text']] },
+  income: { title: 'Outras receitas', fields: [['date', 'Data', 'date', true], ['description', 'Descrição', 'text', true], ['amount', 'Valor (R$)', 'number', true], ['method', 'Recebimento', 'select', true, methods], ['status', 'Situação', 'select', true, ['Recebido', 'Pendente']]] },
+  products: { title: 'Produtos e estoque', fields: [['name', 'Produto', 'text', true], ['category', 'Categoria', 'text'], ['quantity', 'Quantidade atual', 'number', true], ['min', 'Estoque mínimo', 'number'], ['unit', 'Unidade', 'select', false, ['un', 'ml', 'L', 'kg', 'pacote']], ['cost', 'Custo unitário (R$)', 'number'], ['price', 'Preço de venda (R$)', 'number'], ['supplier', 'Fornecedor', 'text']] },
+  equipment: { title: 'Equipamentos', fields: [['name', 'Equipamento', 'text', true], ['brand', 'Marca / modelo', 'text'], ['purchaseDate', 'Data da compra', 'date'], ['purchaseValue', 'Valor de compra (R$)', 'number'], ['condition', 'Estado', 'select', false, ['Operacional', 'Em manutenção', 'Fora de uso']], ['lastMaintenance', 'Última manutenção', 'date'], ['maintenanceCost', 'Custo da manutenção (R$)', 'number'], ['notes', 'Observações', 'text']] }
+};
+const menu = [['dashboard', 'Visão geral', '◈'], ['appointments', 'Atendimentos', '✂'], ['services', 'Serviços', '▤'], ['expenses', 'Despesas', '↘'], ['income', 'Outras receitas', '↗'], ['products', 'Estoque', '▣'], ['equipment', 'Equipamentos', '⚙'], ['reports', 'Relatórios', '▥']];
+const expenseCollection = () => collection(db, 'erp', 'expenses', 'items');
+const isMonthly = x => x.expenseType === 'Fixa mensal';
+const dueDate = x => x.dueDate || x.date || '';
+const expenseState = x => { if (x.status === 'Pago') return 'Paga'; if (!dueDate(x)) return 'Sem vencimento'; const days = dayDiff(today(), dueDate(x)); return days < 0 ? 'Atrasada' : days <= 7 ? 'A vencer' : 'Pendente'; };
+const alertSort = (a, b) => dueDate(a).localeCompare(dueDate(b));
+
+function App() {
+  const [user, setUser] = useState(undefined), [admin, setAdmin] = useState(false), [loadingAdmin, setLoadingAdmin] = useState(true);
+  const [tab, setTab] = useState('dashboard'), [records, setRecords] = useState({}), [form, setForm] = useState(null);
+  const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
+  const [month, setMonth] = useState(today().slice(0, 7)), [query, setQuery] = useState('');
+  const [expensesLoaded, setExpensesLoaded] = useState(false), [recurringBusy, setRecurringBusy] = useState(false);
+  const generatedKeys = useRef(new Set());
+
+  useEffect(() => onAuthStateChanged(auth, u => { setUser(u); setLoadingAdmin(!!u); if (!u) setAdmin(false); }), []);
+  useEffect(() => { if (!user) { setAdmin(false); setLoadingAdmin(false); return; } return onSnapshot(doc(db, 'admins', user.uid), s => { setAdmin(s.exists() && s.data().role === 'admin' && s.data().active === true); setLoadingAdmin(false); }, e => { setMessage('Não foi possível verificar a permissão: ' + e.code); setAdmin(false); setLoadingAdmin(false); }); }, [user]);
+  useEffect(() => {
+    if (!admin) { setRecords({}); setExpensesLoaded(false); return; }
+    const unsubs = Object.keys(defs).map(k => onSnapshot(collection(db, 'erp', k, 'items'), snap => {
+      setRecords(prev => ({ ...prev, [k]: snap.docs.map(d => ({ id: d.id, ...d.data() })) }));
+      if (k === 'expenses') setExpensesLoaded(true);
+    }, e => setMessage('Erro em ' + k + ': ' + e.code)));
+    return () => unsubs.forEach(fn => fn());
+  }, [admin]);
+
+  const list = k => records[k] || [];
+  const validDate = x => (x || '').slice(0, 7) === month;
+  const appointments = list('appointments').filter(x => validDate(x.date) && x.status !== 'Cancelado');
+  const paid = appointments.filter(x => x.status === 'Pago');
+  const exp = list('expenses').filter(x => validDate(x.date));
+  const inc = list('income').filter(x => validDate(x.date));
+  const gross = paid.reduce((a, x) => a + number(x.amount), 0);
+  const fees = paid.reduce((a, x) => a + number(x.fee) + number(x.discount), 0);
+  const other = inc.filter(x => x.status === 'Recebido').reduce((a, x) => a + number(x.amount), 0);
+  const spent = exp.filter(x => x.status === 'Pago').reduce((a, x) => a + number(x.amount), 0);
+  const profit = gross - fees + other - spent;
+  const pending = appointments.filter(x => x.status === 'Pendente').reduce((a, x) => a + number(x.amount) - number(x.discount), 0);
+  const alerts = list('expenses').filter(x => ['Atrasada', 'A vencer'].includes(expenseState(x))).sort(alertSort);
+  const overdue = alerts.filter(x => expenseState(x) === 'Atrasada');
+
+  const resetForm = k => {
+    const v = {};
+    defs[k].fields.forEach(([key, , type, , opts]) => { v[key] = key === 'date' ? today() : type === 'select' ? opts?.[0] || '' : ''; });
+    if (k === 'expenses') { v.dueDate = today(); v.status = 'Pendente'; v.expenseType = 'Avulsa'; }
+    setForm({ type: k, data: v });
+  };
+
+  const save = async e => {
+    e.preventDefault(); if (!admin || !form) return; setBusy(true);
+    try {
+      const { type, data } = form; const payload = { ...data };
+      defs[type].fields.filter(x => x[2] === 'number').forEach(([k]) => payload[k] = number(payload[k]));
+      if (type === 'appointments' && payload.status === 'Pago' && number(payload.discount) > number(payload.amount)) throw Error('O desconto não pode exceder o valor do serviço.');
+      if (type === 'expenses') {
+        if (payload.dueDate && payload.status === 'Pendente' && payload.paidAt) payload.paidAt = '';
+        if (payload.status === 'Pago' && !payload.paidAt) payload.paidAt = today();
+        if (isMonthly(payload) && !payload.dueDate) throw Error('Informe a data de vencimento da despesa fixa mensal.');
+        // Uma despesa mensal cadastrada é a primeira parcela; as próximas são geradas quando o ERP é aberto.
+        if (isMonthly(payload)) {
+          payload.recurringSeriesId = data.recurringSeriesId || data.id || (globalThis.crypto?.randomUUID?.() || `serie-${Date.now()}`);
+          payload.recurringMonth = (payload.dueDate || payload.date).slice(0, 7);
+          payload.recurringDay = data.recurringDay || Number(payload.dueDate.slice(8, 10));
+          payload.recurringStartMonth = data.recurringStartMonth || payload.recurringMonth;
+          payload.recurringActive = true;
+        } else if (data.recurringSeriesId) {
+          // Editar uma parcela avulsa não apaga as outras parcelas já registradas.
+          payload.recurringActive = false;
+          payload.recurringSeriesId = '';
+          payload.recurringMonth = '';
+        }
+      }
+      if (data.id) { const { id, ...rest } = payload; await updateDoc(doc(db, 'erp', type, 'items', id), { ...rest, updatedAt: serverTimestamp() }); }
+      else await addDoc(collection(db, 'erp', type, 'items'), { ...payload, createdAt: serverTimestamp() });
+      setForm(null); setMessage('Registro salvo com sucesso.');
+    } catch (err) { setMessage('Falha ao salvar: ' + err.message); } finally { setBusy(false); }
+  };
+
+  const remove = async (type, id) => {
+    if (!window.confirm('Excluir definitivamente este registro?')) return;
+    try { await deleteDoc(doc(db, 'erp', type, 'items', id)); setMessage('Registro excluído.'); }
+    catch (e) { setMessage('Erro ao excluir: ' + e.code); }
+  };
+
+  // Gera até o mês atual e nunca cria uma parcela futura além do mês corrente.
+  // A chave determinística permite reexecutar sem criar duplicatas.
+  const generateRecurring = async () => {
+    if (!admin || !expensesLoaded || recurringBusy) return;
+    setRecurringBusy(true);
+    try {
+      const all = list('expenses');
+      const currentMonth = today().slice(0, 7);
+      const series = new Map();
+      all.filter(x => isMonthly(x) && x.recurringSeriesId && x.recurringActive !== false).forEach(x => {
+        const key = x.recurringSeriesId;
+        const old = series.get(key);
+        if (!old || (x.recurringMonth || '').localeCompare(old.recurringMonth || '') > 0) series.set(key, x);
+      });
+      let count = 0;
+      for (const [seriesId, template] of series) {
+        const start = template.recurringStartMonth || (template.dueDate || template.date || '').slice(0, 7);
+        if (!/^\d{4}-\d{2}$/.test(start)) continue;
+        let ym = monthShift(start, 1);
+        let safety = 0;
+        while (ym <= currentMonth && safety++ < 120) {
+          const id = `rec-${seriesId}-${ym}`.replaceAll('/', '_');
+          const exists = all.some(x => x.recurringSeriesId === seriesId && (x.recurringMonth || dueDate(x).slice(0, 7)) === ym);
+          if (!exists && !generatedKeys.current.has(id)) {
+            generatedKeys.current.add(id);
+            const d = dueInMonth(ym, template.recurringDay || Number((template.dueDate || '').slice(8, 10)) || 1);
+            const data = { ...template };
+            delete data.id; delete data.createdAt; delete data.updatedAt;
+            data.date = d; data.dueDate = d; data.paidAt = ''; data.status = 'Pendente'; data.recurringMonth = ym;
+            // Firestore setDoc with a deterministic ID is used for idempotent writes.
+            try { await setRecurringDoc(id, data); count++; } catch (err) { generatedKeys.current.delete(id); throw err; }
+          }
+          ym = monthShift(ym, 1);
+        }
+      }
+      setMessage(count ? `${count} despesa(s) mensal(is) gerada(s).` : 'Despesas mensais já estão em dia.');
+    } catch (err) { setMessage('Erro ao gerar despesas mensais: ' + err.message); }
+    finally { setRecurringBusy(false); }
+  };
+
+  // Executa automaticamente ao abrir o ERP ou cadastrar uma nova despesa fixa.
+  const recurringSignature = (records.expenses || []).filter(x => isMonthly(x) && x.recurringSeriesId && x.recurringActive !== false).map(x => x.recurringSeriesId + ':' + (x.recurringStartMonth || x.recurringMonth || '')).sort().join('|');
+  useEffect(() => {
+    if (admin && expensesLoaded && recurringSignature && !recurringBusy) generateRecurring();
+    // O conjunto generatedKeys impede repetição enquanto o snapshot do Firestore atualiza.
+  }, [admin, expensesLoaded, recurringSignature]);
+
+  const exportCsv = kind => {
+    const items = kind === 'all' ? Object.keys(defs).flatMap(k => list(k).map(x => ({ tipo: k, ...x }))) : list(kind);
+    const filtered = kind === 'all' ? items : items.filter(x => !x.date || validDate(x.date));
+    const keys = [...new Set(filtered.flatMap(x => Object.keys(x).filter(k => !['createdAt', 'updatedAt'].includes(k))))];
+    const esc = v => '"' + String(v ?? '').replaceAll('"', '""') + '"';
+    const csv = '\ufeff' + [keys.join(';'), ...filtered.map(x => keys.map(k => esc(x[k])).join(';'))].join('\r\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a'); a.href = url; a.download = `barbearia041-${kind}-${month}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
+
+  if (user === undefined || loadingAdmin) return <div className="center">Carregando Barbearia 041…</div>;
+  if (!user) return <main className="auth"><div className="authCard"><div className="logo">✂ <span>041</span></div><p className="eyebrow">SISTEMA DE GESTÃO</p><h1>Controle total.<br/><em>Em um só lugar.</em></h1><p>Acesso exclusivo do proprietário</p><form onSubmit={async e => { e.preventDefault(); setBusy(true); setMessage(''); try { await signInWithEmailAndPassword(auth, email, password); } catch (err) { setMessage('Não foi possível entrar: ' + err.code); } finally { setBusy(false); } }}><label>E-mail<input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="username" /></label><label>Senha<input type="password" value={password} onChange={e => setPassword(e.target.value)} required autoComplete="current-password" /></label><button className="primary" disabled={busy}>Entrar no sistema</button></form>{message && <p className="error">{message}</p>}</div></main>;
+  if (!admin) return <main className="auth"><div className="authCard"><h2>Acesso restrito</h2><p>Esta conta não possui permissão de proprietário no Firebase.</p>{message && <p className="error">{message}</p>}<button onClick={() => signOut(auth)}>Sair</button></div></main>;
+
+  return <div className="layout"><aside className="sidebar"><div className="logo">✂ <span>041</span></div><p className="eyebrow">GESTÃO EMPRESARIAL</p><nav>{menu.map(([id, label, ico]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => { setTab(id); setForm(null); setQuery(''); }}><span>{ico}</span>{label}</button>)}</nav><div className="user">Proprietário<small>{user.email}</small><button onClick={() => signOut(auth)}>Sair da conta ↗</button></div></aside><main className="content"><header className="top"><div><p className="eyebrow">BARBEARIA 041 / ADMINISTRATIVO</p><h1>{tab === 'dashboard' ? 'Visão geral' : tab === 'reports' ? 'Relatórios' : defs[tab]?.title}</h1></div><div className="tools"><label>Período <input type="month" value={month} onChange={e => setMonth(e.target.value)} /></label></div></header>{message && <div className="notice">{message}<button onClick={() => setMessage('')}>×</button></div>}
+  {(tab === 'dashboard' || tab === 'expenses') && <section className="panel"><div className="sectionHead"><div><h2>🔔 Alertas de despesas</h2><p>Contas não pagas que venceram ou vencem nos próximos 7 dias.</p></div><button onClick={generateRecurring} disabled={recurringBusy}>{recurringBusy ? 'Gerando…' : 'Atualizar despesas mensais'}</button></div>{alerts.length ? <div>{alerts.map(x => <div className="line" key={x.id}><span><b>{expenseState(x) === 'Atrasada' ? '🔴' : '🟠'} {expenseState(x)}</b> — {x.description} • vence {dueDate(x).split('-').reverse().join('/')}</span><b>{money(x.amount)} <button className="linkBtn" onClick={() => { setTab('expenses'); setForm({ type: 'expenses', data: { ...x } }); }}>Editar / Pagar</button></b></div>)}</div> : <p className="hint">Nenhuma conta vencida ou com vencimento nos próximos 7 dias.</p>}</section>}
+  {tab === 'dashboard' && <><section className="stats"><article><small>Faturamento bruto recebido</small><strong>{money(gross)}</strong><span>{paid.length} atendimentos pagos</span></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong><span>{exp.length} lançamentos no período</span></article><article><small>Resultado gerencial</small><strong className={profit >= 0 ? 'positive' : 'negative'}>{money(profit)}</strong><span>Após descontos e taxas</span></article><article><small>A receber de atendimentos</small><strong>{money(pending)}</strong><span>{appointments.length} atendimentos registrados</span></article></section><section className="two"><div className="panel"><h2>Resumo financeiro</h2>{[['Atendimentos recebidos', gross], ['Descontos + taxas', -fees], ['Outras receitas recebidas', other], ['Despesas pagas', -spent], ['Resultado', profit]].map(([label, value]) => <div className="line" key={label}><span>{label}</span><b>{money(value)}</b></div>)}<p className="hint">Resultado gerencial de caixa. Não inclui impostos ou custos não lançados.</p></div><div className="panel"><h2>Indicadores</h2><div className="line"><span>Atendimentos no mês</span><b>{appointments.length}</b></div><div className="line"><span>Ticket médio pago</span><b>{money(paid.length ? gross / paid.length : 0)}</b></div><div className="line"><span>Estoque baixo</span><b>{list('products').filter(x => number(x.quantity) <= number(x.min)).length} produtos</b></div><div className="line"><span>Despesas pendentes</span><b>{money(exp.filter(x => x.status === 'Pendente').reduce((a, x) => a + number(x.amount), 0))}</b></div><div className="line"><span>Contas atrasadas (todos os meses)</span><b>{overdue.length}</b></div><button className="primary" onClick={() => { setTab('appointments'); resetForm('appointments'); }}>+ Registrar atendimento</button></div></section></>}
+  {Object.hasOwn(defs, tab) && <section className="panel"><div className="sectionHead"><div><h2>{defs[tab].title}</h2><p>{tab === 'appointments' ? 'Registre cada atendimento e sua forma de pagamento.' : tab === 'expenses' ? 'Cadastre despesas, vencimentos e contas fixas mensais.' : 'Cadastre e atualize os registros.'}</p></div><button className="primary" onClick={() => resetForm(tab)}>+ Novo registro</button></div><div className="tableTools"><input placeholder="Buscar registros..." value={query} onChange={e => setQuery(e.target.value)} /><button onClick={() => exportCsv(tab)}>Exportar CSV ↓</button></div><div className="tableWrap"><table><thead><tr>{defs[tab].fields.slice(0, 5).map(f => <th key={f[0]}>{f[1]}</th>)}{tab === 'expenses' && <th>Alerta</th>}<th>Ações</th></tr></thead><tbody>{list(tab).filter(x => (!x.date || validDate(x.date)) && JSON.stringify(x).toLowerCase().includes(query.toLowerCase())).sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(x => <tr key={x.id}>{defs[tab].fields.slice(0, 5).map(([k, , type]) => <td key={k}>{type === 'number' && ['amount', 'price', 'cost', 'fee', 'discount', 'purchaseValue', 'maintenanceCost'].includes(k) ? money(x[k]) : String(x[k] ?? '—')}</td>)}{tab === 'expenses' && <td>{expenseState(x)}</td>}<td><button className="linkBtn" onClick={() => setForm({ type: tab, data: { ...x } })}>Editar</button><button className="linkBtn danger" onClick={() => remove(tab, x.id)}>Excluir</button></td></tr>)}{list(tab).length === 0 && <tr><td colSpan="12" className="empty">Nenhum registro cadastrado ainda.</td></tr>}</tbody></table></div></section>}
+  {tab === 'reports' && <><section className="stats"><article><small>Receitas líquidas recebidas</small><strong>{money(gross - fees + other)}</strong></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong></article><article><small>Resultado gerencial</small><strong>{money(profit)}</strong></article><article><small>Atendimentos</small><strong>{appointments.length}</strong></article></section><section className="two"><div className="panel"><h2>Recebimentos por forma de pagamento</h2>{methods.map(m => <div className="line" key={m}><span>{m}</span><b>{money(paid.filter(x => x.method === m).reduce((a, x) => a + number(x.amount) - number(x.discount) - number(x.fee), 0) + inc.filter(x => x.method === m && x.status === 'Recebido').reduce((a, x) => a + number(x.amount), 0))}</b></div>)}</div><div className="panel"><h2>Despesas por categoria</h2>{categories.map(c => <div className="line" key={c}><span>{c}</span><b>{money(exp.filter(x => x.category === c && x.status === 'Pago').reduce((a, x) => a + number(x.amount), 0))}</b></div>)}</div></section><section className="panel"><h2>Exportar registros</h2><p>Faça uma cópia CSV dos lançamentos para conferência e arquivamento.</p><button className="primary" onClick={() => exportCsv('all')}>Exportar todos os registros ↓</button></section></>}
+  <footer>Barbearia 041 • Gestão interna • Alertas exibidos ao acessar o ERP. Faça backups regulares dos dados.</footer></main>
+  {form && <div className="modalBackdrop" onClick={() => setForm(null)}><div className="modal" onClick={e => e.stopPropagation()}><div className="modalHeader"><h2>{form.data.id ? 'Editar' : 'Cadastrar'} — {defs[form.type].title}</h2><button onClick={() => setForm(null)}>×</button></div><form onSubmit={save}><div className="formGrid">{defs[form.type].fields.map(([key, label, type, required, options]) => <label key={key}>{label}{type === 'select' ? <select required={!!required} value={form.data[key] ?? ''} onChange={e => setForm({ ...form, data: { ...form.data, [key]: e.target.value } })}>{options.map(x => <option key={x}>{x}</option>)}</select> : <input required={!!required} type={type} min={type === 'number' ? '0' : undefined} step={type === 'number' ? '0.01' : undefined} value={form.data[key] ?? ''} onChange={e => setForm({ ...form, data: { ...form.data, [key]: e.target.value } })} />}</label>)}</div><div className="modalActions"><button type="button" onClick={() => setForm(null)}>Cancelar</button><button className="primary" disabled={busy}>{busy ? 'Salvando…' : 'Salvar registro'}</button></div></form></div></div>}</div>;
+}
+
+// Importado separadamente para preservar a configuração do Firebase existente.
+async function setRecurringDoc(id, data) {
+  await setDoc(doc(db, 'erp', 'expenses', 'items', id), { ...data, createdAt: serverTimestamp() });
+}
+
+createRoot(document.getElementById('root')).render(<App />);

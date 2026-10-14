@@ -35,6 +35,8 @@ function App() {
   const [tab, setTab] = useState('dashboard'), [records, setRecords] = useState({}), [form, setForm] = useState(null);
   const [email, setEmail] = useState(''), [password, setPassword] = useState(''), [message, setMessage] = useState(''), [busy, setBusy] = useState(false);
   const [month, setMonth] = useState(today().slice(0, 7)), [query, setQuery] = useState('');
+  const [periodFilter, setPeriodFilter] = useState('today');
+  const [referenceDate, setReferenceDate] = useState(today());
   const [opening, setOpening] = useState({date: today(), prolabore:'', expenses:'', safety:'', notes:''});
   const [expensesLoaded, setExpensesLoaded] = useState(false), [recurringBusy, setRecurringBusy] = useState(false);
   const generatedKeys = useRef(new Set());
@@ -55,6 +57,48 @@ function App() {
   const validDate = x => (x || '').slice(0, 7) === month;
   const appointments = list('appointments').filter(x => validDate(x.date) && x.status !== 'Cancelado');
   const paid = appointments.filter(x => x.status === 'Pago');
+  const periodOptions = [
+  ['today', 'Hoje'],
+  ['yesterday', 'Ontem'],
+  ['2days', 'Últimos 2 dias'],
+  ['7days', 'Últimos 7 dias'],
+  ['15days', 'Últimos 15 dias'],
+  ['month', 'Mensal'],
+  ['custom', 'Data específica']
+];
+
+  const periodEnd = periodFilter === 'yesterday'
+  ? addDays(referenceDate, -1)
+  : referenceDate;
+
+  const periodStart = periodFilter === 'yesterday'
+  ? periodEnd
+  : periodFilter === '2days'
+  ? addDays(referenceDate, -1)
+  : periodFilter === '7days'
+  ? addDays(referenceDate, -6)
+  : periodFilter === '15days'
+  ? addDays(referenceDate, -14)
+  : periodFilter === 'month'
+  ? referenceDate.slice(0, 7) + '-01'
+  : referenceDate;
+
+  const periodPaid = list('appointments').filter(x =>
+  x.status === 'Pago' &&
+  x.date >= periodStart &&
+  x.date <= periodEnd
+);
+
+  const periodGross = periodPaid.reduce(
+  (sum, x) => sum + number(x.amount), 0
+);
+
+  const periodNet = periodPaid.reduce(
+  (sum, x) => sum + Math.max(
+    0,
+    number(x.amount) - number(x.discount) - number(x.fee)
+  ), 0
+);
   const exp = list('expenses').filter(x => !x.recurringSkipped && validDate(x.date));
   const inc = list('income').filter(x => validDate(x.date));
   const gross = paid.reduce((a, x) => a + number(x.amount), 0);
@@ -233,6 +277,55 @@ function App() {
   {tab === 'reserves' && <section className="panel"><h2>Adicionar saldo inicial ou ajuste retroativo</h2><p>Preencha a data e os valores que já existiam em cada reserva. Esses valores não recebem uma nova distribuição de 40/40/20. Evite duplicar atendimentos já cadastrados.</p><form onSubmit={saveOpening} className="openingForm"><label>Data<input required type="date" value={opening.date} onChange={e=>setOpening({...opening,date:e.target.value})}/></label>{[['prolabore','Pró-labore'],['expenses','Barbearia'],['safety','Margem de segurança']].map(([key,label])=><label key={key}>{label} (R$)<input type="number" step="0.01" value={opening[key]} onChange={e=>setOpening({...opening,[key]:e.target.value})}/></label>)}<label>Observação<input value={opening.notes} onChange={e=>setOpening({...opening,notes:e.target.value})}/></label><button className="primary" disabled={busy}>Salvar saldo / ajuste</button></form><h2 style={{marginTop:26}}>Histórico de saldos e ajustes</h2><div className="tableWrap"><table><thead><tr><th>Data</th><th>Pró-labore</th><th>Barbearia</th><th>Segurança</th><th>Observação</th><th>Ação</th></tr></thead><tbody>{list('reserves').map(x=><tr key={x.id}><td>{x.date}</td><td>{money(x.prolabore)}</td><td>{money(x.expenses)}</td><td>{money(x.safety)}</td><td>{x.notes||'—'}</td><td><button className="linkBtn danger" onClick={()=>remove('reserves',x.id)}>Excluir</button></td></tr>)}</tbody></table></div></section>}
   {(tab === 'dashboard' || tab === 'expenses') && <section className="panel"><div className="sectionHead"><div><h2>🔔 Alertas de despesas</h2><p>Contas não pagas que venceram ou vencem nos próximos 7 dias.</p></div><button onClick={generateRecurring} disabled={recurringBusy}>{recurringBusy ? 'Gerando…' : 'Atualizar despesas mensais'}</button></div>{alerts.length ? <div>{alerts.map(x => <div className="line" key={x.id}><span><b>{expenseState(x) === 'Atrasada' ? '🔴' : '🟠'} {expenseState(x)}</b> — {x.description} • vence {dueDate(x).split('-').reverse().join('/')}</span><b>{money(x.amount)} <button className="linkBtn" onClick={() => { setTab('expenses'); setForm({ type: 'expenses', data: { ...x } }); }}>Editar / Pagar</button></b></div>)}</div> : <p className="hint">Nenhuma conta vencida ou com vencimento nos próximos 7 dias.</p>}</section>}
   {tab === 'dashboard' && <><section className="stats"><article><small>Faturamento bruto recebido</small><strong>{money(gross)}</strong><span>{paid.length} atendimentos pagos</span></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong><span>{exp.length} lançamentos no período</span></article><article><small>Resultado gerencial</small><strong className={profit >= 0 ? 'positive' : 'negative'}>{money(profit)}</strong><span>Após descontos e taxas</span></article><article><small>A receber de atendimentos</small><strong>{money(pending)}</strong><span>{appointments.length} atendimentos registrados</span></article></section><section className="two"><div className="panel"><h2>Resumo financeiro</h2>{[['Atendimentos recebidos', gross], ['Descontos + taxas', -fees], ['Outras receitas recebidas', other], ['Despesas pagas', -spent], ['Resultado', profit]].map(([label, value]) => <div className="line" key={label}><span>{label}</span><b>{money(value)}</b></div>)}<p className="hint">Resultado gerencial de caixa. Não inclui impostos ou custos não lançados.</p></div><div className="panel"><h2>Indicadores</h2><div className="line"><span>Atendimentos no mês</span><b>{appointments.length}</b></div><div className="line"><span>Ticket médio pago</span><b>{money(paid.length ? gross / paid.length : 0)}</b></div><div className="line"><span>Estoque baixo</span><b>{list('products').filter(x => number(x.quantity) <= number(x.min)).length} produtos</b></div><div className="line"><span>Despesas pendentes</span><b>{money(exp.filter(x => x.status === 'Pendente').reduce((a, x) => a + number(x.amount), 0))}</b></div><div className="line"><span>Contas atrasadas (todos os meses)</span><b>{overdue.length}</b></div><button className="primary" onClick={() => { setTab('appointments'); resetForm('appointments'); }}>+ Registrar atendimento</button></div></section></>}
+  <section className="panel">
+  <h2>Faturamento por período</h2>
+
+  <div className="tableTools">
+    <select
+      value={periodFilter}
+      onChange={e => setPeriodFilter(e.target.value)}
+    >
+      {periodOptions.map(([value, label]) =>
+        <option key={value} value={value}>{label}</option>
+      )}
+    </select>
+
+    <input
+      type="date"
+      value={referenceDate}
+      onChange={e => setReferenceDate(e.target.value)}
+    />
+
+    <button onClick={() => {
+      setReferenceDate(today());
+      setPeriodFilter('today');
+    }}>
+      Voltar para hoje
+    </button>
+  </div>
+
+  <section className="stats">
+    <article>
+      <small>Faturamento bruto</small>
+      <strong>{money(periodGross)}</strong>
+    </article>
+
+    <article>
+      <small>Faturamento líquido</small>
+      <strong>{money(periodNet)}</strong>
+    </article>
+
+    <article>
+      <small>Atendimentos pagos</small>
+      <strong>{periodPaid.length}</strong>
+    </article>
+
+    <article>
+      <small>Período consultado</small>
+      <span>{periodStart} até {periodEnd}</span>
+    </article>
+  </section>
+</section>
   {Object.hasOwn(defs, tab) && <section className="panel"><div className="sectionHead"><div><h2>{defs[tab].title}</h2><p>{tab === 'appointments' ? 'Registre cada atendimento e sua forma de pagamento.' : tab === 'expenses' ? 'Cadastre despesas, vencimentos e contas fixas mensais.' : 'Cadastre e atualize os registros.'}</p></div><button className="primary" onClick={() => resetForm(tab)}>+ Novo registro</button></div><div className="tableTools"><input placeholder="Buscar registros..." value={query} onChange={e => setQuery(e.target.value)} /><button onClick={() => exportCsv(tab)}>Exportar CSV ↓</button></div><div className="tableWrap"><table><thead><tr>{defs[tab].fields.slice(0, 5).map(f => <th key={f[0]}>{f[1]}</th>)}{tab === 'expenses' && <th>Alerta</th>}<th>Ações</th></tr></thead><tbody>{list(tab).filter(x => !x.recurringSkipped && (!x.date || validDate(x.date)) && JSON.stringify(x).toLowerCase().includes(query.toLowerCase())).sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(x => <tr key={x.id}>{defs[tab].fields.slice(0, 5).map(([k, , type]) => <td key={k}>{type === 'number' && ['amount', 'price', 'cost', 'fee', 'discount', 'purchaseValue', 'maintenanceCost'].includes(k) ? money(x[k]) : String(x[k] ?? '—')}</td>)}{tab === 'expenses' && <td>{expenseState(x)}</td>}<td><button className="linkBtn" onClick={() => setForm({ type: tab, data: { ...x } })}>Editar</button><button className="linkBtn danger" onClick={() => remove(tab, x.id)}>Excluir</button></td></tr>)}{list(tab).length === 0 && <tr><td colSpan="12" className="empty">Nenhum registro cadastrado ainda.</td></tr>}</tbody></table></div></section>}
   {tab === 'reports' && <><section className="stats"><article><small>Receitas líquidas recebidas</small><strong>{money(gross - fees + other)}</strong></article><article><small>Despesas pagas</small><strong>{money(spent)}</strong></article><article><small>Resultado gerencial</small><strong>{money(profit)}</strong></article><article><small>Atendimentos</small><strong>{appointments.length}</strong></article></section><section className="two"><div className="panel"><h2>Recebimentos por forma de pagamento</h2>{methods.map(m => <div className="line" key={m}><span>{m}</span><b>{money(paid.filter(x => x.method === m).reduce((a, x) => a + number(x.amount) - number(x.discount) - number(x.fee), 0) + inc.filter(x => x.method === m && x.status === 'Recebido').reduce((a, x) => a + number(x.amount), 0))}</b></div>)}</div><div className="panel"><h2>Despesas por categoria</h2>{categories.map(c => <div className="line" key={c}><span>{c}</span><b>{money(exp.filter(x => x.category === c && x.status === 'Pago').reduce((a, x) => a + number(x.amount), 0))}</b></div>)}</div></section><section className="panel"><h2>Exportar registros</h2><p>Faça uma cópia CSV dos lançamentos para conferência e arquivamento.</p><button className="primary" onClick={() => exportCsv('all')}>Exportar todos os registros ↓</button></section></>}
   <footer>Barbearia 041 • Gestão interna • Alertas exibidos ao acessar o ERP. Faça backups regulares dos dados.</footer></main>

@@ -74,7 +74,10 @@ function App() {
   allocationCents.push(receivedCents - allocationCents[0] - allocationCents[1]);
   const fundNames = ['Pró-labore','Barbearia','Margem de segurança'];
   const openingCents = fundNames.map((_,i) => historicalOpening.reduce((sum,x) => sum + toCents([x.prolabore,x.expenses,x.safety][i]),0));
-  const usedCents = fundNames.map(name => historicalExpenses.filter(x => (x.fundSource || 'Despesas') === name).reduce((sum,x)=>sum+toCents(x.amount),0));
+  const usedCents = fundNames.map(name => historicalExpenses.filter(x => {
+  const source = x.fundSource || 'Despesas';
+  return (source === 'Despesas' ? 'Barbearia' : source) === name;
+}).reduce((sum, x) => sum + toCents(x.amount), 0));
   const balancesCents = fundNames.map((_,i) => allocationCents[i]+openingCents[i]-usedCents[i]);
   const monthNetCents = paid.reduce((sum,x)=>sum+Math.max(0,toCents(x.amount)-toCents(x.discount)-toCents(x.fee)),0);
   const monthShares = [Math.round(monthNetCents*.4),Math.round(monthNetCents*.4)];
